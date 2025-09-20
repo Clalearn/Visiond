@@ -1,18 +1,30 @@
-# Usa Python 3.11 slim come base
+# Base image
 FROM python:3.11-slim
 
-# Imposta la cartella di lavoro dentro il container
+# Set workdir
 WORKDIR /app
 
-# Copia requirements.txt e installa le dipendenze
+# Aggiorna apt e installa dipendenze di sistema
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    libffi-dev \
+    libblas-dev \
+    liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copia requirements e installa Python packages
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia tutti i file del progetto nel container
+# Copia tutto il codice
 COPY . .
 
-# Esponi la porta 5000 (usata da Flask)
+# Esponi porta
 EXPOSE 5000
 
-# Comando per avviare l'app
+# Avvia app
 CMD ["python", "app.py"]
