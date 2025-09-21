@@ -1,11 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, Response, jsonify
 import os
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # === CONFIGURAZIONE MODELLO LLAMA ===
-# Salva il modello nella cartella dell'app (compatibile con Render e Linux)
-percorso_cartella_modelli = os.path.join(os.getcwd(), "chatbot_models")
+percorso_cartella_modelli = "D:\\chatbot_models"
 os.makedirs(percorso_cartella_modelli, exist_ok=True)
 
 repo_id = "Qwen/Qwen2-1.5B-Instruct-GGUF"
@@ -13,20 +12,19 @@ nome_file_modello = "qwen2-1_5b-instruct-q4_k_m.gguf"
 
 percorso_completo_modello = os.path.join(percorso_cartella_modelli, nome_file_modello)
 
-# Scarica il modello solo se non esiste
 if not os.path.exists(percorso_completo_modello):
-    print(f"[INFO] Modello non trovato. Download di '{nome_file_modello}' in '{percorso_cartella_modelli}'...")
+    print(f"Modello non trovato. Inizio il download di '{nome_file_modello}' in '{percorso_cartella_modelli}'...")
     hf_hub_download(
         repo_id=repo_id,
         filename=nome_file_modello,
         local_dir=percorso_cartella_modelli,
         local_dir_use_symlinks=False
     )
-    print("[INFO] Download completato.")
+    print("Download completato.")
 else:
-    print(f"[INFO] Modello già presente in '{percorso_completo_modello}'.")
+    print(f"Modello già presente in '{percorso_completo_modello}'.")
 
-print("[INFO] Caricamento del modello in memoria... Potrebbe richiedere un po' di tempo.")
+print("Caricamento del modello in memoria... Potrebbe richiedere qualche istante.")
 llm = Llama(
     model_path=percorso_completo_modello,
     n_ctx=4096,
@@ -34,16 +32,16 @@ llm = Llama(
     n_gpu_layers=10,
     verbose=False
 )
-print("[INFO] Modello caricato correttamente. Pronto per chattare!")
+print("Modello caricato. Pronto per chattare!")
 
-# === CRONOLOGIA CHAT ===
+# === INIZIALIZZA CRONOLOGIA CHAT ===
 cronologia_chat = [
     {
         "role": "system",
         "content": (
             "Sei un assistente AI utile e cordiale specializzato nell'istruzione. "
             "Rispondi sempre e solo in italiano. "
-            "Alle domande su chi sei rispondi sempre: Sono l'AI di Cla!. "
+            "Alle domande su chi sei rispondi sempre: Sono vision oppure sono vision un AI creata da Cla!. "
             "Alle domande relative su chi ti ha creato rispondi sempre: Sono stato creato dal team di Cla!"
         )
     }
@@ -159,58 +157,61 @@ def index():
                 document.getElementById('user-input').value = '';
                 chatLog.scrollTop = chatLog.scrollHeight;
 
-                fetch('/get_response', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 'message': userInput })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    chatLog.innerHTML += `<div class="message bot-message">Cla!: ${data.response}</div>`;
+                // Creo un messaggio vuoto per lo streaming
+                const botMessage = document.createElement('div');
+                botMessage.className = 'message bot-message';
+                botMessage.textContent = "Cla!: ";
+                chatLog.appendChild(botMessage);
+
+                // Uso EventSource per leggere i token in tempo reale
+                const eventSource = new EventSource(`/get_response?message=${encodeURIComponent(userInput)}`);
+                eventSource.onmessage = function(event) {
+                    if (event.data === "[END]") {
+                        eventSource.close();
+                        return;
+                    }
+                    botMessage.textContent += event.data;
                     chatLog.scrollTop = chatLog.scrollHeight;
-                });
+                };
             }
 
             document.getElementById('user-input').addEventListener('keypress', function (e) {
-                if (e.key === 'Enter') {
-                    sendMessage();
-                }
+                if (e.key === 'Enter') sendMessage();
             });
         </script>
     </body>
     </html>
     """
 
-@app.route('/get_response', methods=['POST'])
+@app.route('/get_response')
 def get_response():
-    data = request.get_json()
-    user_input = data['message'].strip()
-    print(f"[LOG] Messaggio ricevuto: {user_input}", flush=True)
-
+    user_input = request.args.get("message", "").strip()
     cronologia_chat.append({"role": "user", "content": user_input})
 
-    try:
-        output = llm.create_chat_completion(
-            messages=cronologia_chat,
-            max_tokens=512,
-            temperature=0.7,
-            top_p=0.9,
-            stream=False
-        )
-        risposta = output['choices'][0]['message']['content']
-        cronologia_chat.append({"role": "assistant", "content": risposta})
-        print(f"[LOG] Risposta generata: {risposta[:100]}...", flush=True)
-    except Exception as e:
-        risposta = f"Si è verificato un errore durante l'elaborazione: {str(e)}"
-        print(f"[ERRORE] {e}", flush=True)
+    def generate():
+        try:
+            for chunk in llm.create_chat_completion(
+                messages=cronologia_chat,
+                max_tokens=512,
+                temperature=0.7,
+                top_p=0.9,
+                stream=True
+            ):
+                if "choices" in chunk and "delta" in chunk["choices"][0]:
+                    token = chunk["choices"][0]["delta"].get("content", "")
+                    if token:
+                        yield f"data: {token}\n\n"
+            yield "data: [END]\n\n"
+        except Exception as e:
+            yield f"data: [Errore: {str(e)}]\n\n"
+            yield "data: [END]\n\n"
 
-    return jsonify({'response': risposta})
+    return Response(generate(), mimetype="text/event-stream")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000)) 
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
