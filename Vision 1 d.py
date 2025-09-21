@@ -4,7 +4,8 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # === CONFIGURAZIONE MODELLO LLAMA ===
-percorso_cartella_modelli = "D:\\chatbot_models"
+# Salva il modello nella cartella dell'app (compatibile con Render e Linux)
+percorso_cartella_modelli = os.path.join(os.getcwd(), "chatbot_models")
 os.makedirs(percorso_cartella_modelli, exist_ok=True)
 
 repo_id = "Qwen/Qwen2-1.5B-Instruct-GGUF"
@@ -12,19 +13,20 @@ nome_file_modello = "qwen2-1_5b-instruct-q4_k_m.gguf"
 
 percorso_completo_modello = os.path.join(percorso_cartella_modelli, nome_file_modello)
 
+# Scarica il modello solo se non esiste
 if not os.path.exists(percorso_completo_modello):
-    print(f"Modello non trovato. Inizio il download di '{nome_file_modello}' in '{percorso_cartella_modelli}'...")
+    print(f"[INFO] Modello non trovato. Download di '{nome_file_modello}' in '{percorso_cartella_modelli}'...")
     hf_hub_download(
         repo_id=repo_id,
         filename=nome_file_modello,
         local_dir=percorso_cartella_modelli,
         local_dir_use_symlinks=False
     )
-    print("Download completato.")
+    print("[INFO] Download completato.")
 else:
-    print(f"Modello già presente in '{percorso_completo_modello}'.")
+    print(f"[INFO] Modello già presente in '{percorso_completo_modello}'.")
 
-print("Caricamento del modello in memoria... Potrebbe richiedere qualche istante.")
+print("[INFO] Caricamento del modello in memoria... Potrebbe richiedere un po' di tempo.")
 llm = Llama(
     model_path=percorso_completo_modello,
     n_ctx=4096,
@@ -32,9 +34,9 @@ llm = Llama(
     n_gpu_layers=10,
     verbose=False
 )
-print("Modello caricato. Pronto per chattare!")
+print("[INFO] Modello caricato correttamente. Pronto per chattare!")
 
-# === INIZIALIZZA CRONOLOGIA CHAT ===
+# === CRONOLOGIA CHAT ===
 cronologia_chat = [
     {
         "role": "system",
@@ -185,6 +187,7 @@ def index():
 def get_response():
     data = request.get_json()
     user_input = data['message'].strip()
+    print(f"[LOG] Messaggio ricevuto: {user_input}", flush=True)
 
     cronologia_chat.append({"role": "user", "content": user_input})
 
@@ -198,10 +201,14 @@ def get_response():
         )
         risposta = output['choices'][0]['message']['content']
         cronologia_chat.append({"role": "assistant", "content": risposta})
+        print(f"[LOG] Risposta generata: {risposta[:100]}...", flush=True)
     except Exception as e:
         risposta = f"Si è verificato un errore durante l'elaborazione: {str(e)}"
+        print(f"[ERRORE] {e}", flush=True)
 
     return jsonify({'response': risposta})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+
