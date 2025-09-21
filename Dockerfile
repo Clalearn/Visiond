@@ -27,4 +27,5 @@ COPY . .
 EXPOSE 5000
 
 # Avvia app
-CMD ["python", "app.py"]
+CMD ["python", "Vision 1 d.py"]
+
