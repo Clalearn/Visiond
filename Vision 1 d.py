@@ -7,8 +7,8 @@ from llama_cpp import Llama
 percorso_cartella_modelli = "D:\\chatbot_models"
 os.makedirs(percorso_cartella_modelli, exist_ok=True)
 
-repo_id = "Qwen/Qwen2-1.5B-Instruct-GGUF"
-nome_file_modello = "qwen2-1_5b-instruct-q4_k_m.gguf"
+repo_id = "Qwen/Qwen2-0.5B-Instruct-GGUF"
+nome_file_modello = "qwen2-0_5b-instruct-q4_k_m.gguf"
 
 percorso_completo_modello = os.path.join(percorso_cartella_modelli, nome_file_modello)
 
@@ -176,6 +176,7 @@ def chat():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
