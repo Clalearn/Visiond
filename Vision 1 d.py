@@ -4,12 +4,11 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # === CONFIGURAZIONE MODELLO LLAMA ===
-percorso_cartella_modelli = "D:\\chatbot_models"
+percorso_cartella_modelli = os.getenv("MODEL_PATH", "/opt/render/models")
 os.makedirs(percorso_cartella_modelli, exist_ok=True)
 
 repo_id = "Qwen/Qwen2-1.5B-Instruct-GGUF"
 nome_file_modello = "qwen2-1_5b-instruct-q4_k_m.gguf"
-
 percorso_completo_modello = os.path.join(percorso_cartella_modelli, nome_file_modello)
 
 if not os.path.exists(percorso_completo_modello):
@@ -17,8 +16,7 @@ if not os.path.exists(percorso_completo_modello):
     hf_hub_download(
         repo_id=repo_id,
         filename=nome_file_modello,
-        local_dir=percorso_cartella_modelli,
-        local_dir_use_symlinks=False
+        local_dir=percorso_cartella_modelli
     )
     print("Download completato.")
 else:
@@ -27,25 +25,15 @@ else:
 print("Caricamento del modello in memoria... Potrebbe richiedere qualche istante.")
 llm = Llama(
     model_path=percorso_completo_modello,
-    n_ctx=4096,
-    n_threads=8,
-    n_gpu_layers=10,
-    verbose=False
+    n_ctx=2048,
+    n_threads=4,
+    n_gpu_layers=0,
+    verbose=True
 )
 print("Modello caricato. Pronto per chattare!")
 
 # === INIZIALIZZA CRONOLOGIA CHAT ===
-cronologia_chat = [
-    {
-        "role": "system",
-        "content": (
-            "Sei un assistente AI utile e cordiale specializzato nell'istruzione. "
-            "Rispondi sempre e solo in italiano. "
-            "Alle domande su chi sei rispondi sempre: Sono vision oppure sono vision un AI creata da Cla!. "
-            "Alle domande relative su chi ti ha creato rispondi sempre: Sono stato creato dal team di Cla!"
-        )
-    }
-]
+cronologia_chat_sessions = {}
 
 # === FLASK APP ===
 app = Flask(__name__)
@@ -58,79 +46,18 @@ def index():
     <head>
         <title>Cla! Chatbot</title>
         <style>
-            body {
-                font-family: sans-serif;
-                background-color: #f0f0f0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-                margin: 0;
-            }
-            .chat-container {
-                background-color: #fff;
-                border-radius: 8px;
-                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-                overflow: hidden;
-                width: 80%;
-                max-width: 600px;
-                display: flex;
-                flex-direction: column;
-            }
-            .chat-header {
-                padding: 15px;
-                text-align: center;
-                border-bottom: 1px solid #eee;
-            }
-            .chat-header img {
-                max-width: 150px;
-            }
-            .chat-log {
-                padding: 15px;
-                flex-grow: 1;
-                overflow-y: auto;
-                display: flex;
-                flex-direction: column;
-            }
-            .message {
-                padding: 8px 12px;
-                margin-bottom: 8px;
-                border-radius: 15px;
-                clear: both;
-            }
-            .user-message {
-                background-color: #e0f7fa;
-                align-self: flex-end;
-                color: #00838f;
-            }
-            .bot-message {
-                background-color: #f5f5f5;
-                color: #333;
-                align-self: flex-start;
-            }
-            .input-area {
-                padding: 10px;
-                display: flex;
-                border-top: 1px solid #eee;
-            }
-            #user-input {
-                flex-grow: 1;
-                padding: 10px;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                margin-right: 10px;
-            }
-            button {
-                background-color: #00838f;
-                color: white;
-                border: none;
-                padding: 10px 15px;
-                border-radius: 5px;
-                cursor: pointer;
-            }
-            button:hover {
-                background-color: #006064;
-            }
+            body { font-family: sans-serif; background-color: #f0f0f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+            .chat-container { background-color: #fff; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); overflow: hidden; width: 80%; max-width: 600px; display: flex; flex-direction: column; }
+            .chat-header { padding: 15px; text-align: center; border-bottom: 1px solid #eee; }
+            .chat-header img { max-width: 150px; }
+            .chat-log { padding: 15px; flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; }
+            .message { padding: 8px 12px; margin-bottom: 8px; border-radius: 15px; clear: both; }
+            .user-message { background-color: #e0f7fa; align-self: flex-end; color: #00838f; }
+            .bot-message { background-color: #f5f5f5; color: #333; align-self: flex-start; }
+            .input-area { padding: 10px; display: flex; border-top: 1px solid #eee; }
+            #user-input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 5px; margin-right: 10px; }
+            button { background-color: #00838f; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
+            button:hover { background-color: #006064; }
         </style>
     </head>
     <body>
@@ -139,111 +66,8 @@ def index():
                 <img src="/static/logo_prova1.png" alt="Logo Cla!">
             </div>
             <div class="chat-log" id="chat-log">
-                <div class="message bot-message">Ciao! Sono Cla, la tua assistente AI. Come posso aiutarti oggi?</div>
-            </div>
-            <div class="input-area">
-                <input type="text" id="user-input" placeholder="Scrivi qui il tuo messaggio..." autofocus>
-                <button type="button" onclick="sendMessage()">Invia</button>
-            </div>
-        </div>
+                <div class="message bot-message">Ciao! Sono Cla,
 
-        <script>
-            function sendMessage() {
-                const userInput = document.getElementById('user-input').value.trim();
-                if (!userInput) return;
-
-                const chatLog = document.getElementById('chat-log');
-                chatLog.innerHTML += `<div class="message user-message">Utente: ${userInput}</div>`;
-                document.getElementById('user-input').value = '';
-                chatLog.scrollTop = chatLog.scrollHeight;
-
-                // Creo un messaggio vuoto per lo streaming
-                const botMessage = document.createElement('div');
-                botMessage.className = 'message bot-message';
-                botMessage.textContent = "Cla!: ";
-                chatLog.appendChild(botMessage);
-
-                // Uso EventSource per leggere i token in tempo reale
-                const eventSource = new EventSource(`/get_response?message=${encodeURIComponent(userInput)}`);
-                eventSource.onmessage = function(event) {
-                    if (event.data === "[END]") {
-                        eventSource.close();
-                        return;
-                    }
-                    botMessage.textContent += event.data;
-                    chatLog.scrollTop = chatLog.scrollHeight;
-                };
-            }
-
-            document.getElementById('user-input').addEventListener('keypress', function (e) {
-                if (e.key === 'Enter') sendMessage();
-            });
-        </script>
-    </body>
-    </html>
-    """
-
-@app.route('/get_response')
-def get_response():
-    user_input = request.args.get("message", "").strip()
-    cronologia_chat.append({"role": "user", "content": user_input})
-
-    def generate():
-        try:
-            for chunk in llm.create_chat_completion(
-                messages=cronologia_chat,
-                max_tokens=512,
-                temperature=0.7,
-                top_p=0.9,
-                stream=True
-            ):
-                if "choices" in chunk and "delta" in chunk["choices"][0]:
-                    token = chunk["choices"][0]["delta"].get("content", "")
-                    if token:
-                        yield f"data: {token}\n\n"
-            yield "data: [END]\n\n"
-        except Exception as e:
-            yield f"data: [Errore: {str(e)}]\n\n"
-            yield "data: [END]\n\n"
-
-    return Response(generate(), mimetype="text/event-stream")
-
-@app.route('/chat', methods=['POST'])
-def chat():
-    try:
-        # Ottieni il messaggio utente dal body JSON
-        data = request.json
-        user_input = data.get('message', '').strip()
-        if not user_input:
-            return jsonify({'error': 'Nessun messaggio fornito'}), 400
-
-        # Aggiungi il messaggio alla cronologia
-        cronologia_chat.append({"role": "user", "content": user_input})
-
-        # Genera la risposta completa (non streaming)
-        response = llm.create_chat_completion(
-            messages=cronologia_chat,
-            max_tokens=512,
-            temperature=0.7,
-            top_p=0.9,
-            stream=False
-        )
-
-        # Estrai il contenuto della risposta
-        bot_response = response['choices'][0]['message']['content']
-
-        # Aggiungi la risposta alla cronologia
-        cronologia_chat.append({"role": "assistant", "content": bot_response})
-
-        # Restituisci la risposta in formato JSON
-        return jsonify({'response': bot_response})
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
 
 
 
