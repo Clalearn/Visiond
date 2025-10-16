@@ -23,14 +23,18 @@ else:
     print(f"Modello già presente in '{percorso_completo_modello}'.")
 
 print("Caricamento del modello in memoria... Potrebbe richiedere qualche istante.")
-llm = Llama(
-    model_path=percorso_completo_modello,
-    n_ctx=2048,
-    n_threads=4,
-    n_gpu_layers=0,
-    verbose=True
-)
-print("Modello caricato. Pronto per chattare!")
+try:
+    llm = Llama(
+        model_path=percorso_completo_modello,
+        n_ctx=2048,
+        n_threads=4,
+        n_gpu_layers=0,
+        verbose=True
+    )
+    print("Modello caricato. Pronto per chattare!")
+except Exception as e:
+    print(f"Errore caricamento modello: {str(e)}")
+    raise
 
 # === INIZIALIZZA CRONOLOGIA CHAT ===
 cronologia_chat_sessions = {}
@@ -66,7 +70,127 @@ def index():
                 <img src="/static/logo_prova1.png" alt="Logo Cla!">
             </div>
             <div class="chat-log" id="chat-log">
-                <div class="message bot-message">Ciao! Sono Cla,
+                <div class="message bot-message">Ciao! Sono Cla, la tua assistente AI. Come posso aiutarti oggi?</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="user-input" placeholder="Scrivi qui il tuo messaggio..." autofocus>
+                <button type="button" onclick="sendMessage()">Invia</button>
+            </div>
+        </div>
+        <script>
+            function sendMessage() {
+                const userInput = document.getElementById('user-input').value.trim();
+                if (!userInput) return;
+                const chatLog = document.getElementById('chat-log');
+                chatLog.innerHTML += `<div class="message user-message">Utente: ${userInput}</div>`;
+                document.getElementById('user-input').value = '';
+                chatLog.scrollTop = chatLog.scrollHeight;
+                const botMessage = document.createElement('div');
+                botMessage.className = 'message bot-message';
+                botMessage.textContent = "Cla!: ";
+                chatLog.appendChild(botMessage);
+                const eventSource = new EventSource(`/get_response?message=${encodeURIComponent(userInput)}&session_id=${encodeURIComponent('web-' + Date.now())}`);
+                eventSource.onmessage = function(event) {
+                    if (event.data === "[END]") {
+                        eventSource.close();
+                        return;
+                    }
+                    botMessage.textContent += event.data;
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                };
+            }
+            document.getElementById('user-input').addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') sendMessage();
+            });
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route('/get_response')
+def get_response():
+    user_input = request.args.get("message", "").strip()
+    session_id = request.args.get("session_id", "default")
+    if session_id not in cronologia_chat_sessions:
+        cronologia_chat_sessions[session_id] = [
+            {
+                "role": "system",
+                "content": (
+                    "Sei un assistente AI utile e cordiale specializzato nell'istruzione. "
+                    "Rispondi sempre e solo in italiano. "
+                    "Alle domande su chi sei rispondi sempre: Sono vision oppure sono vision un AI creata da Cla!. "
+                    "Alle domande relative su chi ti ha creato rispondi sempre: Sono stato creato dal team di Cla!"
+                )
+            }
+        ]
+    cronologia_chat_sessions[session_id].append({"role": "user", "content": user_input})
+
+    def generate():
+        try:
+            for chunk in llm.create_chat_completion(
+                messages=cronologia_chat_sessions[session_id],
+                max_tokens=512,
+                temperature=0.7,
+                top_p=0.9,
+                stream=True
+            ):
+                if "choices" in chunk and "delta" in chunk["choices"][0]:
+                    token = chunk["choices"][0]["delta"].get("content", "")
+                    if token:
+                        yield f"data: {token}\n\n"
+            yield "data: [END]\n\n"
+        except Exception as e:
+            yield f"data: [Errore: {str(e)}]\n\n"
+            yield "data: [END]\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        auth_token = request.headers.get('Authorization')
+        if auth_token != f"Bearer {os.getenv('AUTH_TOKEN', 'your-secret-token')}":
+            return jsonify({'error': 'Autenticazione fallita'}), 401
+
+        data = request.json
+        user_input = data.get('message', '').strip()
+        session_id = data.get('session_id', 'default')
+        if not user_input:
+            return jsonify({'error': 'Nessun messaggio fornito'}), 400
+
+        if session_id not in cronologia_chat_sessions:
+            cronologia_chat_sessions[session_id] = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Sei un assistente AI utile e cordiale specializzato nell'istruzione. "
+                        "Rispondi sempre e solo in italiano. "
+                        "Alle domande su chi sei rispondi sempre: Sono vision oppure sono vision un AI creata da Cla!. "
+                        "Alle domande relative su chi ti ha creato rispondi sempre: Sono stato creato dal team di Cla!"
+                    )
+                }
+            ]
+
+        cronologia_chat_sessions[session_id].append({"role": "user", "content": user_input})
+        response = llm.create_chat_completion(
+            messages=cronologia_chat_sessions[session_id],
+            max_tokens=512,
+            temperature=0.7,
+            top_p=0.9,
+            stream=False
+        )
+        bot_response = response['choices'][0]['message']['content']
+        cronologia_chat_sessions[session_id].append({"role": "assistant", "content": bot_response})
+
+        return jsonify({'response': bot_response})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
