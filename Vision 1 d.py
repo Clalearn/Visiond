@@ -17,8 +17,7 @@ if not os.path.exists(percorso_completo_modello):
     hf_hub_download(
         repo_id=repo_id,
         filename=nome_file_modello,
-        local_dir=percorso_cartella_modelli,
-        local_dir_use_symlinks=False
+        local_dir=percorso_cartella_modelli
     )
     print("Download completato.")
 else:
@@ -29,12 +28,12 @@ llm = Llama(
     model_path=percorso_completo_modello,
     n_ctx=4096,
     n_threads=8,
-    n_gpu_layers=10,
+    n_gpu_layers=0,  # Imposta 0 su Render free-tier (CPU-only)
     verbose=False
 )
 print("Modello caricato. Pronto per chattare!")
 
-# === INIZIALIZZA CRONOLOGIA CHAT ===
+# === CRONOLOGIA CHAT ===
 cronologia_chat = [
     {
         "role": "system",
@@ -58,79 +57,18 @@ def index():
     <head>
         <title>Cla! Chatbot</title>
         <style>
-            body {
-                font-family: sans-serif;
-                background-color: #f0f0f0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-                margin: 0;
-            }
-            .chat-container {
-                background-color: #fff;
-                border-radius: 8px;
-                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-                overflow: hidden;
-                width: 80%;
-                max-width: 600px;
-                display: flex;
-                flex-direction: column;
-            }
-            .chat-header {
-                padding: 15px;
-                text-align: center;
-                border-bottom: 1px solid #eee;
-            }
-            .chat-header img {
-                max-width: 150px;
-            }
-            .chat-log {
-                padding: 15px;
-                flex-grow: 1;
-                overflow-y: auto;
-                display: flex;
-                flex-direction: column;
-            }
-            .message {
-                padding: 8px 12px;
-                margin-bottom: 8px;
-                border-radius: 15px;
-                clear: both;
-            }
-            .user-message {
-                background-color: #e0f7fa;
-                align-self: flex-end;
-                color: #00838f;
-            }
-            .bot-message {
-                background-color: #f5f5f5;
-                color: #333;
-                align-self: flex-start;
-            }
-            .input-area {
-                padding: 10px;
-                display: flex;
-                border-top: 1px solid #eee;
-            }
-            #user-input {
-                flex-grow: 1;
-                padding: 10px;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                margin-right: 10px;
-            }
-            button {
-                background-color: #00838f;
-                color: white;
-                border: none;
-                padding: 10px 15px;
-                border-radius: 5px;
-                cursor: pointer;
-            }
-            button:hover {
-                background-color: #006064;
-            }
+            body { font-family: sans-serif; background-color: #f0f0f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+            .chat-container { background-color: #fff; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); overflow: hidden; width: 80%; max-width: 600px; display: flex; flex-direction: column; }
+            .chat-header { padding: 15px; text-align: center; border-bottom: 1px solid #eee; }
+            .chat-header img { max-width: 150px; }
+            .chat-log { padding: 15px; flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; }
+            .message { padding: 8px 12px; margin-bottom: 8px; border-radius: 15px; clear: both; }
+            .user-message { background-color: #e0f7fa; align-self: flex-end; color: #00838f; }
+            .bot-message { background-color: #f5f5f5; color: #333; align-self: flex-start; }
+            .input-area { padding: 10px; display: flex; border-top: 1px solid #eee; }
+            #user-input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 5px; margin-right: 10px; }
+            button { background-color: #00838f; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
+            button:hover { background-color: #006064; }
         </style>
     </head>
     <body>
@@ -146,7 +84,6 @@ def index():
                 <button type="button" onclick="sendMessage()">Invia</button>
             </div>
         </div>
-
         <script>
             function sendMessage() {
                 const userInput = document.getElementById('user-input').value.trim();
@@ -164,10 +101,7 @@ def index():
 
                 const eventSource = new EventSource(`/get_response?message=${encodeURIComponent(userInput)}`);
                 eventSource.onmessage = function(event) {
-                    if (event.data === "[END]") {
-                        eventSource.close();
-                        return;
-                    }
+                    if (event.data === "[END]") { eventSource.close(); return; }
                     botMessage.textContent += event.data;
                     chatLog.scrollTop = chatLog.scrollHeight;
                 };
@@ -181,7 +115,7 @@ def index():
     </html>
     """
 
-# === ENDPOINT STREAMING (PER SITO WEB) ===
+# === ENDPOINT STREAMING PER SITO WEB ===
 @app.route('/get_response')
 def get_response():
     user_input = request.args.get("message", "").strip()
@@ -207,30 +141,33 @@ def get_response():
 
     return Response(generate(), mimetype="text/event-stream")
 
-# === ENDPOINT REST (PER FLUTTERFLOW) ===
+# === ENDPOINT REST PER FLUTTERFLOW (RAM-FRIENDLY) ===
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
     user_input = data.get("message", "").strip()
-
     if not user_input:
         return jsonify({"error": "Messaggio mancante"}), 400
 
     cronologia_chat.append({"role": "user", "content": user_input})
 
+    risposta_completa = ""
     try:
-        risposta = llm.create_chat_completion(
+        # STREAM interno per consumare poca RAM
+        for chunk in llm.create_chat_completion(
             messages=cronologia_chat,
             max_tokens=512,
             temperature=0.7,
             top_p=0.9,
-            stream=False
-        )
+            stream=True
+        ):
+            if "choices" in chunk and "delta" in chunk["choices"][0]:
+                token = chunk["choices"][0]["delta"].get("content", "")
+                if token:
+                    risposta_completa += token
 
-        contenuto = risposta["choices"][0]["message"]["content"]
-        cronologia_chat.append({"role": "assistant", "content": contenuto})
-
-        return jsonify({"response": contenuto})
+        cronologia_chat.append({"role": "assistant", "content": risposta_completa})
+        return jsonify({"response": risposta_completa})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -239,6 +176,9 @@ def chat():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
+
 
 
 
