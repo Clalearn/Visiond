@@ -1,216 +1,125 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, jsonify
 import os
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
+import logging
 
-# === CONFIGURAZIONE MODELLO LLAMA ===
-percorso_cartella_modelli = "D:\\chatbot_models"
+# Imposta il logging per una migliore visibilità su Render
+logging.basicConfig(level=logging.INFO)
+
+app = Flask(__name__)
+
+# === CONFIGURAZIONE E CARICAMENTO MODELLO LLAMA ===
+# NOTA: Usiamo un percorso relativo, essenziale per il deploy su servizi come Render.
+percorso_cartella_modelli = "./models"
 os.makedirs(percorso_cartella_modelli, exist_ok=True)
 
 repo_id = "Qwen/Qwen2-1.5B-Instruct-GGUF"
 nome_file_modello = "qwen2-1_5b-instruct-q4_k_m.gguf"
-
 percorso_completo_modello = os.path.join(percorso_cartella_modelli, nome_file_modello)
 
+# Download del modello se non esiste
 if not os.path.exists(percorso_completo_modello):
-    print(f"Modello non trovato. Inizio il download di '{nome_file_modello}' in '{percorso_cartella_modelli}'...")
+    logging.info(f"Modello non trovato. Inizio il download di '{nome_file_modello}'...")
     hf_hub_download(
         repo_id=repo_id,
         filename=nome_file_modello,
         local_dir=percorso_cartella_modelli,
         local_dir_use_symlinks=False
     )
-    print("Download completato.")
+    logging.info("Download completato.")
 else:
-    print(f"Modello già presente in '{percorso_completo_modello}'.")
+    logging.info(f"Modello già presente in '{percorso_completo_modello}'.")
 
-print("Caricamento del modello in memoria... Potrebbe richiedere qualche istante.")
-llm = Llama(
-    model_path=percorso_completo_modello,
-    n_ctx=4096,
-    n_threads=8,
-    n_gpu_layers=10,
-    verbose=False
-)
-print("Modello caricato. Pronto per chattare!")
+# Caricamento del modello (avviene una sola volta all'avvio dell'app)
+logging.info("Caricamento del modello in memoria...")
+try:
+    llm = Llama(
+        model_path=percorso_completo_modello,
+        n_ctx=4096,
+        n_threads=8,
+        n_gpu_layers=10, # Imposta a 0 se non usi una GPU su Render
+        verbose=False
+    )
+    logging.info("Modello caricato con successo. L'API è pronta.")
+except Exception as e:
+    logging.error(f"Errore durante il caricamento del modello: {e}")
+    llm = None
 
-# === INIZIALIZZA CRONOLOGIA CHAT ===
-cronologia_chat = [
+# === PROMPT DI SISTEMA ===
+# Questo è il prompt iniziale che definisce il comportamento del bot
+SYSTEM_PROMPT_MESSAGES = [
     {
         "role": "system",
         "content": (
             "Sei un assistente AI utile e cordiale specializzato nell'istruzione. "
             "Rispondi sempre e solo in italiano. "
-            "Alle domande su chi sei rispondi sempre: Sono vision oppure sono vision un AI creata da Cla!. "
+            "Alle domande su chi sei rispondi sempre: Sono Vision, un'AI creata da Cla!. "
             "Alle domande relative su chi ti ha creato rispondi sempre: Sono stato creato dal team di Cla!"
         )
     }
 ]
 
-# === FLASK APP ===
-app = Flask(__name__)
 
+# === NUOVO ENDPOINT API PER FLUTTERFLOW ===
+@app.route('/api/chat', methods=['POST'])
+def api_chat():
+    if llm is None:
+        return jsonify({'error': 'Modello non caricato, impossibile processare la richiesta'}), 503
+
+    # 1. Riceve i dati JSON da FlutterFlow
+    data = request.get_json()
+    if not data or 'message' not in data:
+        return jsonify({'error': 'Il campo "message" è obbligatorio'}), 400
+
+    user_message = data['message']
+    # La cronologia viene passata dal client. Se non c'è, è la prima interazione.
+    history = data.get('history', [])
+
+    # 2. Prepara i messaggi per il modello
+    # Se la cronologia è vuota, inizia con il prompt di sistema
+    if not history:
+        messages = SYSTEM_PROMPT_MESSAGES.copy()
+    else:
+        messages = history
+    
+    # Aggiunge il nuovo messaggio dell'utente
+    messages.append({"role": "user", "content": user_message})
+
+    # 3. Ottiene la risposta dal modello (non in streaming)
+    try:
+        response = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=512,
+            temperature=0.7,
+            stream=False # Fondamentale: otteniamo una risposta unica
+        )
+        bot_reply = response['choices'][0]['message']['content']
+    except Exception as e:
+        logging.error(f"Errore nella generazione della risposta del modello: {e}")
+        return jsonify({'error': 'Errore interno del server durante la generazione della risposta'}), 500
+
+    # 4. Aggiorna la cronologia con la risposta del bot
+    messages.append({"role": "assistant", "content": bot_reply})
+
+    # 5. Restituisce la risposta e la nuova cronologia a FlutterFlow
+    return jsonify({
+        'reply': bot_reply,
+        'new_history': messages
+    })
+
+
+# Mantengo la tua vecchia route per test web, se vuoi, ma non è necessaria per FlutterFlow
 @app.route('/')
 def index():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Cla! Chatbot</title>
-        <style>
-            body {
-                font-family: sans-serif;
-                background-color: #f0f0f0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-                margin: 0;
-            }
-            .chat-container {
-                background-color: #fff;
-                border-radius: 8px;
-                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-                overflow: hidden;
-                width: 80%;
-                max-width: 600px;
-                display: flex;
-                flex-direction: column;
-            }
-            .chat-header {
-                padding: 15px;
-                text-align: center;
-                border-bottom: 1px solid #eee;
-            }
-            .chat-header img {
-                max-width: 150px;
-            }
-            .chat-log {
-                padding: 15px;
-                flex-grow: 1;
-                overflow-y: auto;
-                display: flex;
-                flex-direction: column;
-            }
-            .message {
-                padding: 8px 12px;
-                margin-bottom: 8px;
-                border-radius: 15px;
-                clear: both;
-            }
-            .user-message {
-                background-color: #e0f7fa;
-                align-self: flex-end;
-                color: #00838f;
-            }
-            .bot-message {
-                background-color: #f5f5f5;
-                color: #333;
-                align-self: flex-start;
-            }
-            .input-area {
-                padding: 10px;
-                display: flex;
-                border-top: 1px solid #eee;
-            }
-            #user-input {
-                flex-grow: 1;
-                padding: 10px;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                margin-right: 10px;
-            }
-            button {
-                background-color: #00838f;
-                color: white;
-                border: none;
-                padding: 10px 15px;
-                border-radius: 5px;
-                cursor: pointer;
-            }
-            button:hover {
-                background-color: #006064;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="chat-container">
-            <div class="chat-header">
-                <img src="/static/logo_prova1.png" alt="Logo Cla!">
-            </div>
-            <div class="chat-log" id="chat-log">
-                <div class="message bot-message">Ciao! Sono Cla, la tua assistente AI. Come posso aiutarti oggi?</div>
-            </div>
-            <div class="input-area">
-                <input type="text" id="user-input" placeholder="Scrivi qui il tuo messaggio..." autofocus>
-                <button type="button" onclick="sendMessage()">Invia</button>
-            </div>
-        </div>
+    return "<h1>Chatbot API</h1><p>Questa è l'API del chatbot. Usa l'endpoint /api/chat con una richiesta POST.</p>"
 
-        <script>
-            function sendMessage() {
-                const userInput = document.getElementById('user-input').value.trim();
-                if (!userInput) return;
-
-                const chatLog = document.getElementById('chat-log');
-                chatLog.innerHTML += `<div class="message user-message">Utente: ${userInput}</div>`;
-                document.getElementById('user-input').value = '';
-                chatLog.scrollTop = chatLog.scrollHeight;
-
-                // Creo un messaggio vuoto per lo streaming
-                const botMessage = document.createElement('div');
-                botMessage.className = 'message bot-message';
-                botMessage.textContent = "Cla!: ";
-                chatLog.appendChild(botMessage);
-
-                // Uso EventSource per leggere i token in tempo reale
-                const eventSource = new EventSource(`/get_response?message=${encodeURIComponent(userInput)}`);
-                eventSource.onmessage = function(event) {
-                    if (event.data === "[END]") {
-                        eventSource.close();
-                        return;
-                    }
-                    botMessage.textContent += event.data;
-                    chatLog.scrollTop = chatLog.scrollHeight;
-                };
-            }
-
-            document.getElementById('user-input').addEventListener('keypress', function (e) {
-                if (e.key === 'Enter') sendMessage();
-            });
-        </script>
-    </body>
-    </html>
-    """
-
-@app.route('/get_response')
-def get_response():
-    user_input = request.args.get("message", "").strip()
-    cronologia_chat.append({"role": "user", "content": user_input})
-
-    def generate():
-        try:
-            for chunk in llm.create_chat_completion(
-                messages=cronologia_chat,
-                max_tokens=512,
-                temperature=0.7,
-                top_p=0.9,
-                stream=True
-            ):
-                if "choices" in chunk and "delta" in chunk["choices"][0]:
-                    token = chunk["choices"][0]["delta"].get("content", "")
-                    if token:
-                        yield f"data: {token}\n\n"
-            yield "data: [END]\n\n"
-        except Exception as e:
-            yield f"data: [Errore: {str(e)}]\n\n"
-            yield "data: [END]\n\n"
-
-    return Response(generate(), mimetype="text/event-stream")
 
 if __name__ == '__main__':
+    # Render imposterà la variabile PORT automaticamente
     port = int(os.environ.get("PORT", 5000)) 
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port)
+
 
 
 
