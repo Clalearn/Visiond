@@ -39,11 +39,17 @@ except Exception as e:
 # === INIZIALIZZA CRONOLOGIA CHAT ===
 cronologia_chat_sessions = {}
 
+# === NUOVA COSTANTE: Limite per la cronologia ===
+# Questo numero definisce quanti messaggi recenti (utente + assistente) inviare al modello.
+# 10 significa circa 5 scambi di battute. Puoi aggiustarlo se necessario.
+MAX_HISTORY_MESSAGES = 10
+
 # === FLASK APP ===
 app = Flask(__name__)
 
 @app.route('/')
 def index():
+    # ... (Il tuo codice HTML/JS rimane invariato, lo ometto per brevità) ...
     return """
     <!DOCTYPE html>
     <html>
@@ -125,10 +131,16 @@ def get_response():
         ]
     cronologia_chat_sessions[session_id].append({"role": "user", "content": user_input})
 
+    # === MODIFICA: Prepara la cronologia limitata per il modello ===
+    full_history = cronologia_chat_sessions[session_id]
+    # Mantiene il messaggio di sistema e gli ultimi MAX_HISTORY_MESSAGES
+    messages_to_send = [full_history[0]] + full_history[-MAX_HISTORY_MESSAGES:]
+
     def generate():
         try:
+            # Usa la cronologia limitata (messages_to_send) invece di quella completa
             for chunk in llm.create_chat_completion(
-                messages=cronologia_chat_sessions[session_id],
+                messages=messages_to_send, # <-- MODIFICA APPLICATA QUI
                 max_tokens=512,
                 temperature=0.7,
                 top_p=0.9,
@@ -172,14 +184,23 @@ def chat():
             ]
 
         cronologia_chat_sessions[session_id].append({"role": "user", "content": user_input})
+
+        # === MODIFICA: Prepara la cronologia limitata per il modello ===
+        full_history = cronologia_chat_sessions[session_id]
+        # Mantiene il messaggio di sistema e gli ultimi MAX_HISTORY_MESSAGES
+        messages_to_send = [full_history[0]] + full_history[-MAX_HISTORY_MESSAGES:]
+
+        # Usa la cronologia limitata (messages_to_send) invece di quella completa
         response = llm.create_chat_completion(
-            messages=cronologia_chat_sessions[session_id],
+            messages=messages_to_send, # <-- MODIFICA APPLICATA QUI
             max_tokens=512,
             temperature=0.7,
             top_p=0.9,
             stream=False
         )
         bot_response = response['choices'][0]['message']['content']
+        
+        # IMPORTANTE: Aggiungi la risposta del bot alla cronologia COMPLETA per continuità
         cronologia_chat_sessions[session_id].append({"role": "assistant", "content": bot_response})
 
         return jsonify({'response': bot_response})
@@ -190,6 +211,7 @@ def chat():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
